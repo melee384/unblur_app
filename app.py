@@ -1,0 +1,99 @@
+import cv2
+import numpy as np
+import streamlit as st
+from PIL import Image
+from skimage import restoration
+
+# Set up the Streamlit page layout
+st.set_page_config(page_title="Image Unblurrer", layout="centered")
+st.title("📷 Image Unblur & Sharpening App")
+st.write("Upload a blurry image and choose a method to restore clarity.")
+
+# File uploader
+uploaded_file = st.file_uploader(
+    "Choose an image...", type=["jpg", "jpeg", "png"]
+)
+
+if uploaded_file is not None:
+    # Convert uploaded file to OpenCV format
+    image = Image.open(uploaded_file)
+    img_array = np.array(image)
+
+    # Display original image
+    st.subheader("Original Image")
+    st.image(image, use_container_width=True)
+
+    # Sidebar options for processing
+    st.sidebar.header("Tuning Controls")
+    method = st.sidebar.selectbox(
+        "Select Unblur Method", ("Laplacian Sharpening", "Richardson-Lucy Deconvolution")
+    )
+
+    # Process based on selection
+    if method == "Laplacian Sharpening":
+        st.sidebar.markdown("### Sharpening Strength")
+        strength = st.sidebar.slider(
+            "Amount", min_value=1.0, max_value=5.0, value=1.5, step=0.1
+        )
+
+        # Create a sharpening kernel
+        # Center value controls intensity, surrounding elements subtract blur
+        kernel = np.array(
+            [[0, -1, 0], [-1, 4 + strength, -1], [0, -1, 0]]
+        ) / strength
+
+        # Apply filter
+        processed_img = cv2.filter2D(img_array, -1, kernel)
+        processed_img = np.clip(processed_img, 0, 255).astype(np.uint8)
+
+    elif method == "Richardson-Lucy Deconvolution":
+        st.sidebar.markdown("### Deconvolution Settings")
+        psf_size = st.sidebar.slider(
+            "Estimated Blur Size (PSF)", min_value=3, max_value=15, value=5, step=2
+        )
+        iterations = st.sidebar.slider(
+            "Iterations", min_value=5, max_value=50, value=15, step=5
+        )
+
+        # Convert to float and normalize for scikit-image
+        img_float = img_array.astype(np.float32) / 255.0
+
+        # Create a Point Spread Function (PSF) assuming Gaussian blur
+        psf = np.ones((psf_size, psf_size)) / (psf_size**2)
+
+        # Apply Richardson-Lucy deconvolution channel by channel if color
+        if len(img_float.shape) == 3:
+            processed_channels = []
+            for i in range(3):
+                deconv = restoration.richardson_lucy(
+                    img_float[:, :, i], psf, num_iter=iterations
+                )
+                processed_channels.append(deconv)
+            processed_img = np.stack(processed_channels, axis=-1)
+        else:
+            processed_img = restoration.richardson_lucy(
+                img_float, psf, num_iter=iterations
+            )
+
+        # Convert back to 8-bit integer
+        processed_img = (np.clip(processed_img, 0, 1) * 255).astype(np.uint8)
+
+    # Display Result
+    st.subheader("Restored Image")
+    st.image(processed_img, use_container_width=True)
+
+    # Download Button
+    result_pil = Image.fromarray(processed_img)
+    # Save to bytes to make it downloadable
+    import io
+
+    buf = io.BytesIO()
+    result_pil.save(buf, format="JPEG")
+    byte_im = buf.getvalue()
+
+    st.download_button(
+        label="📥 Download Unblurred Image",
+        data=byte_im,
+        file_name="unblurred_image.jpg",
+        mime="image/jpeg",
+    )
